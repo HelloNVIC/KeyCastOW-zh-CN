@@ -1,5 +1,8 @@
-// Copyright © 2014 Brook Hong. All Rights Reserved.
+﻿// Copyright © 2014 Brook Hong. All Rights Reserved.
 //
+// keylog.cpp — 键盘/鼠标输入捕获模块
+// 通过全局低级钩子 (WH_KEYBOARD_LL / WH_MOUSE_LL) 捕获输入事件，
+// 将虚拟键码、组合键和鼠标动作转换为可显示的文本，再交给 keycast.cpp 渲染。
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,10 +10,14 @@
 
 #include "keylog.h"
 
+// Key — 虚拟键码到显示文本的映射项
 struct Key {
-    int val;
-    LPCWSTR label;
+    int val;          // Windows 虚拟键码（VK_*）
+    LPCWSTR label;    // 屏幕上显示的文本
 };
+
+// specialKeys — 常见特殊键映射表
+// 可打印字符优先通过 ToUnicodeEx 转换；无法转换的按键从此表中查找显示名称。
 struct Key specialKeys[] = {
     {0x08, L"Backspace"},                 // back
     {0x09, L"Tab"},
@@ -132,8 +139,10 @@ struct Key specialKeys[] = {
     {0xFE, L"OEM_CLEAR"}
 };
 
-size_t nSpecialKeys = sizeof(specialKeys) / sizeof(Key);
+size_t nSpecialKeys = sizeof(specialKeys) / sizeof(Key);  // 特殊键映射表长度
 
+// mouseActions — 原始鼠标消息名称表
+// 下标为 wp - WM_MOUSEFIRST，用于将低级鼠标消息转换为显示文本。
 LPCWSTR mouseActions[] = {
     L"MouseMove",
     L"LButtonDown",
@@ -151,30 +160,35 @@ LPCWSTR mouseActions[] = {
     L"XButtonDBLCLK",
     L"MouseHWheel"
 };
+// mouseClicks — 合并后的鼠标单击显示文本
 LPCWSTR mouseClicks[] = {
     L"LClick",
     L"RClick",
     L"MClick"
 };
+// mouseDblClicks — 合并后的鼠标双击显示文本
 LPCWSTR mouseDblClicks[] = {
     L"LDblClick",
     L"RDblClick",
     L"MDblClick"
 };
 
-size_t nMouseActions = sizeof(mouseActions) / sizeof(LPCWSTR);
+size_t nMouseActions = sizeof(mouseActions) / sizeof(LPCWSTR);  // 鼠标消息名称表长度
 
-extern BOOL visibleShift;
-extern BOOL visibleModifier;
-extern BOOL mouseCapturing;
-extern BOOL mouseCapturingMod;
-extern BOOL keyAutoRepeat;
-extern BOOL mergeMouseActions;
-extern BOOL onlyCommandKeys;
-extern WCHAR comboChars[3];
-extern BOOL positioning;
-extern WCHAR deferredLabel[64];
-HHOOK kbdhook, moshook;
+// 来自 keycast.cpp 的全局设置和状态
+extern BOOL visibleShift;       // 是否单独显示 Shift
+extern BOOL visibleModifier;    // 是否单独显示修饰键
+extern BOOL mouseCapturing;     // 是否捕获鼠标事件
+extern BOOL mouseCapturingMod;  // 是否仅在修饰键按下时捕获鼠标
+extern BOOL keyAutoRepeat;      // 是否允许自动重复按键显示
+extern BOOL mergeMouseActions;  // 是否合并鼠标按下/释放为单击/双击
+extern BOOL onlyCommandKeys;    // 是否仅显示组合键
+extern WCHAR comboChars[3];     // 组合键包围符/连接符
+extern BOOL positioning;        // 是否处于显示位置调整模式
+extern WCHAR deferredLabel[64]; // 延迟显示的标签文本
+HHOOK kbdhook, moshook;         // 全局键盘/鼠标钩子句柄
+
+// 来自 keycast.cpp 的显示与定位函数
 void showText(LPCWSTR text, int behavior = 0);
 void fadeLastLabel(BOOL weither);
 void positionOrigin(int action, POINT &pt);
@@ -183,6 +197,12 @@ void positionOrigin(int action, POINT &pt);
 #include <sstream>
 void log(const std::stringstream & line);
 #endif
+// GetSymbolFromVK — 将虚拟键码转换为当前键盘布局下的可打印字符
+// vk        - 虚拟键码
+// sc        - 扫描码
+// mod       - 是否处于组合键上下文（Ctrl/Alt/Win 已按下）
+// hklLayout - 当前活动窗口线程的键盘布局
+// 返回值为静态缓冲区指针；无法转换时返回 NULL。
 LPCWSTR GetSymbolFromVK(UINT vk, UINT sc, BOOL mod, HKL hklLayout) {
     static WCHAR symbol[32];
     BYTE btKeyState[256];
@@ -217,6 +237,8 @@ LPCWSTR GetSymbolFromVK(UINT vk, UINT sc, BOOL mod, HKL hklLayout) {
     }
     return NULL;
 }
+// getSpecialKey — 从 specialKeys 表中查找虚拟键码对应的显示名称
+// 未知键码会以十六进制形式显示（如 0xE1）
 LPCWSTR getSpecialKey(UINT vk) {
     static WCHAR unknown[32];
     for (size_t i=0; i < nSpecialKeys; ++i) {
@@ -227,6 +249,8 @@ LPCWSTR getSpecialKey(UINT vk) {
     swprintf(unknown, 32, L"0x%02x", vk);
     return unknown;
 }
+// addBracket — 按 comboChars 设置为组合键文本添加外层括号
+// 例如 comboChars="<->" 时：Ctrl - C → <Ctrl - C>
 void addBracket(LPWSTR str) {
     WCHAR tmp[64];
     if(wcslen(comboChars) > 2) {
@@ -234,6 +258,9 @@ void addBracket(LPWSTR str) {
         swprintf(str, 64, L"%c%s%c", comboChars[0], tmp, comboChars[2]);
     }
 }
+// getModSpecialKey — 获取特殊键在组合键场景下的显示文本
+// mod=FALSE 表示单独按下特殊键，此时会按配置添加括号；
+// mod=TRUE 表示该键是组合键的一部分，不额外添加括号。
 LPCWSTR getModSpecialKey(UINT vk, BOOL mod = FALSE) {
     static WCHAR modsk[64];
     if( vk == 0xA0 || vk == 0xA1) {
@@ -264,8 +291,8 @@ LPCWSTR getModSpecialKey(UINT vk, BOOL mod = FALSE) {
     return modsk;
 }
 
-// remove a modifier vk from modifierkeys
-// for example, remove "Alt" from "Ctrl - Alt"
+// 从 modifierkeys 中移除某个修饰键 vk
+// 例如，从 "Ctrl - Alt" 中移除 Alt 后得到 "Ctrl"
 void cleanModifier(UINT vk, LPWSTR modifierkeys) {
     WCHAR tmp[64];
     LPCWSTR ck = getSpecialKey(vk);
@@ -286,8 +313,17 @@ void cleanModifier(UINT vk, LPWSTR modifierkeys) {
     }
 }
 
-static WCHAR modifierkey[64] = L"\0";
-static BOOL modifierUsed = FALSE;
+static WCHAR modifierkey[64] = L"\0";  // 当前按下的修饰键组合文本，如 "Ctrl - Alt"
+static BOOL modifierUsed = FALSE;       // 当前修饰键是否已经与普通键/鼠标动作组合使用
+
+// LLKeyboardProc — 全局低级键盘钩子回调
+// 处理按键按下/释放，维护修饰键状态，并将按键转换为显示文本。
+// 显示策略：
+// 1. Ctrl/Alt/Win/Shift 等修饰键会记录到 modifierkey；
+// 2. 普通可打印字符使用当前键盘布局转换；
+// 3. 不可打印按键使用 specialKeys；
+// 4. 组合键会使用 comboChars 包装，例如 [Ctrl + C]；
+// 5. 根据 keyAutoRepeat / onlyCommandKeys / visibleModifier 等设置决定是否显示。
 LRESULT CALLBACK LLKeyboardProc(int nCode, WPARAM wp, LPARAM lp)
 {
     KBDLLHOOKSTRUCT k = *(KBDLLHOOKSTRUCT *)lp;
@@ -377,6 +413,11 @@ LRESULT CALLBACK LLKeyboardProc(int nCode, WPARAM wp, LPARAM lp)
     return CallNextHookEx(kbdhook, nCode, wp, lp);
 }
 
+// LLMouseProc — 全局低级鼠标钩子回调
+// 捕获鼠标点击、双击、滚轮等动作，并转换为标签文本。
+// 当 mergeMouseActions 为 TRUE 时，会把 Down/Up 合并为 Click/DblClick；
+// 为了准确判断单击/双击，鼠标 Down 事件会先作为 deferredLabel 延迟显示。
+// 如果当前有修饰键按下，会显示为组合动作，例如 [Ctrl + LClick]。
 LRESULT CALLBACK LLMouseProc(int nCode, WPARAM wp, LPARAM lp)
 {
     WCHAR c[64] = L"\0";

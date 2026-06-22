@@ -1,6 +1,9 @@
-// Copyright © 2014 Brook Hong. All Rights Reserved.
+﻿// Copyright © 2014 Brook Hong. All Rights Reserved.
 //
+// keycast.cpp — 显示引擎与应用程序主体
+// 负责按键标签的渲染、生命周期管理、画布/窗口管理、设置持久化及应用程序主循环。
 
+// 构建命令参考：
 // msbuild /p:platform=win32 /p:Configuration=Release
 // msbuild keycastow.vcxproj /t:Clean
 // rc keycastow.rc && cl -DUNICODE -D_UNICODE keycast.cpp keylog.cpp keycastow.res user32.lib shell32.lib gdi32.lib Comdlg32.lib comctl32.lib
@@ -17,101 +20,112 @@ using namespace Gdiplus;
 
 #include "resource.h"
 #include "timer.h"
-CTimer showTimer;
-CTimer previewTimer;
+CTimer showTimer;      // 标签动画定时器，驱动淡入/停留/淡出
+CTimer previewTimer;   // 设置对话框中的预览定时器
 
-WCHAR iniFile[MAX_PATH];
+WCHAR iniFile[MAX_PATH];  // INI 配置文件路径（与 exe 同名 .ini）
 
 #define MAXCHARS 4096
-WCHAR textBuffer[MAXCHARS];
-LPCWSTR textBufferEnd = textBuffer + MAXCHARS;
+WCHAR textBuffer[MAXCHARS];        // 所有标签共享的文本缓冲区，避免频繁内存分配
+LPCWSTR textBufferEnd = textBuffer + MAXCHARS;  // 缓冲区末尾指针，用于溢出检测
 
+// KeyLabel — 单个按键标签
+// 每个标签对应屏幕上一行按键显示，包含位置、文本指针、计时和淡出标志
 struct KeyLabel {
-    RectF rect;
-    WCHAR *text;
-    DWORD length;
-    int time;
-    BOOL fade;
+    RectF rect;       // 标签在画布上的绘制区域
+    WCHAR *text;      // 指向 textBuffer 中此标签文本的起始位置
+    DWORD length;     // 文本字符数
+    int time;         // 剩余显示时间（毫秒），递减至 0 后标签被清除
+    BOOL fade;        // 是否正在淡出（TRUE=正在淡出，FALSE=保持显示）
     KeyLabel() {
         text = textBuffer;
         length = 0;
     }
 };
 
+// LabelSettings — 标签外观设置
+// 包含字体、颜色、不透明度、边框和圆角等参数
 struct LabelSettings {
-    DWORD keyStrokeDelay;
-    DWORD lingerTime;
-    DWORD fadeDuration;
-    LOGFONT font;
-    COLORREF bgColor, textColor, borderColor;
-    DWORD bgOpacity, textOpacity, borderOpacity;
-    int borderSize;
-    int cornerSize;
+    DWORD keyStrokeDelay;   // 按键组合延迟：在此时间内连续按键会合并到同一标签
+    DWORD lingerTime;       // 标签停留时间（毫秒）：淡出前保持完全显示的时间
+    DWORD fadeDuration;     // 淡出持续时间（毫秒）：从完全显示到完全透明的时间
+    LOGFONT font;           // 标签字体（GDI LOGFONT 结构）
+    COLORREF bgColor, textColor, borderColor;  // 背景色、文字色、边框色（BGR 格式）
+    DWORD bgOpacity, textOpacity, borderOpacity; // 背景不透明度、文字不透明度、边框不透明度（0~255）
+    int borderSize;         // 边框粗细（像素）
+    int cornerSize;         // 圆角半径（像素），0 为直角矩形
 };
-LabelSettings labelSettings, previewLabelSettings;
-DWORD labelSpacing;
-BOOL visibleShift = FALSE;
-BOOL visibleModifier = TRUE;
-BOOL mouseCapturing = TRUE;
-BOOL mouseCapturingMod = FALSE;
-BOOL keyAutoRepeat = TRUE;
-BOOL mergeMouseActions = TRUE;
-int alignment = 1;
-BOOL onlyCommandKeys = FALSE;
-BOOL positioning = FALSE;
-BOOL draggableLabel = FALSE;
-UINT tcModifiers = MOD_ALT;
-UINT tcKey = 0x42;      // 0x42 is 'b'
-Color clearColor(0, 127, 127, 127);
+LabelSettings labelSettings, previewLabelSettings;  // 当前生效设置 / 设置对话框预览设置
+DWORD labelSpacing;        // 标签行间距（像素）
+BOOL visibleShift = FALSE;  // 是否单独显示 Shift 键（默认不单独显示）
+BOOL visibleModifier = TRUE; // 是否单独显示修饰键（Ctrl/Alt/Win）
+BOOL mouseCapturing = TRUE;  // 是否捕获并显示鼠标事件
+BOOL mouseCapturingMod = FALSE; // 是否仅在修饰键按下时捕获鼠标
+BOOL keyAutoRepeat = TRUE;   // 是否允许按键自动重复显示（长按连续触发）
+BOOL mergeMouseActions = TRUE; // 是否合并鼠标按下/释放为单击/双击
+int alignment = 1;           // 对齐方式：0=左对齐，1=右对齐
+BOOL onlyCommandKeys = FALSE; // 是否仅显示组合键（含修饰键的按键）
+BOOL positioning = FALSE;    // 是否处于定位模式（用户拖拽调整显示区域）
+BOOL draggableLabel = FALSE; // 标签是否可拖拽
+UINT tcModifiers = MOD_ALT;  // 切换开关热键的修饰键（默认 Alt）
+UINT tcKey = 0x42;      // 切换开关热键的主键（0x42 = 'B'，即 Alt+B）
+Color clearColor(0, 127, 127, 127);  // 画布清除色（ARGB，alpha=0 完全透明）
 #define BRANDINGMAX 256
-WCHAR branding[BRANDINGMAX];
-WCHAR comboChars[4];
-POINT deskOrigin;
+WCHAR branding[BRANDINGMAX];  // 品牌标识文本（显示在屏幕角落，双击可打开设置）
+WCHAR comboChars[4];          // 组合键连接符方案，如 "[+]" → [Ctrl + C]
+POINT deskOrigin;             // 显示区域原点坐标（屏幕坐标）
 
-#define MAXLABELS 60
-KeyLabel keyLabels[MAXLABELS];
-DWORD maximumLines = 10;
-DWORD labelCount = 0;
-RECT desktopRect;
-SIZE canvasSize;
-POINT canvasOrigin;
+#define MAXLABELS 60           // 标签数组最大容量
+KeyLabel keyLabels[MAXLABELS]; // 标签数组
+DWORD maximumLines = 10;       // 最大显示行数（用户可配置）
+DWORD labelCount = 0;          // 当前活跃标签数（由 prepareLabels 计算）
+RECT desktopRect;              // 当前显示器工作区域
+SIZE canvasSize;               // 画布像素尺寸
+POINT canvasOrigin;            // 画布在屏幕上的起始坐标
 
 #include "keycast.h"
 #include "keylog.h"
 
-WCHAR *szWinName = L"KeyCastOW";
-HWND hMainWnd;
-HWND hDlgSettings;
-RECT settingsDlgRect;
-HWND hWndStamp;
-HINSTANCE hInstance;
-Graphics * gCanvas = NULL;
-Font * fontPlus = NULL;
+WCHAR *szWinName = L"KeyCastOW";  // 主窗口类名
+HWND hMainWnd;           // 主显示窗口句柄（分层透明窗口）
+HWND hDlgSettings;       // 设置对话框句柄
+RECT settingsDlgRect;    // 设置对话框位置
+HWND hWndStamp;          // 品牌/配置标识小窗口句柄（可拖拽）
+HINSTANCE hInstance;     // 应用程序实例句柄
+Graphics * gCanvas = NULL;  // GDI+ 画布 Graphics 对象
+Font * fontPlus = NULL;     // GDI+ 字体对象（由 labelSettings.font 创建）
 
-#define IDI_TRAY       100
-#define WM_TRAYMSG     101
-#define MENU_CONFIG    32
-#define MENU_EXIT      33
-#define MENU_RESTORE   34
+// 自定义消息和菜单 ID
+#define IDI_TRAY       100   // 系统托盘图标 ID
+#define WM_TRAYMSG     101   // 托盘消息自定义消息值
+#define MENU_CONFIG    32    // 菜单：设置
+#define MENU_EXIT      33    // 菜单：退出
+#define MENU_RESTORE   34    // 菜单：恢复默认设置
 
+// 前向声明：将文本显示为按键标签
 void showText(LPCWSTR text, int behavior);
 
 #ifdef _DEBUG
-WCHAR capFile[MAX_PATH];
-FILE *capStream = NULL;
-WCHAR recordFN[MAX_PATH];
-int replayStatus = 0;
-#define MENU_REPLAY    35
+// ---- 调试专用：录制/回放功能 ----
+WCHAR capFile[MAX_PATH];      // 按键录制文件路径
+FILE *capStream = NULL;       // 按键录制文件流
+WCHAR recordFN[MAX_PATH];     // 回放文件路径
+int replayStatus = 0;         // 回放状态：0=停止，1=播放中，2=停止请求
+#define MENU_REPLAY    35     // 菜单：回放
+
+// Displayed — 录制文件中的一条按键记录
 struct Displayed {
-    DWORD tm;
-    int behavior;
-    size_t len;
+    DWORD tm;         // 时间戳（GetTickCount）
+    int behavior;     // 显示行为（0=追加，1=新行，2=替换）
+    size_t len;       // 文本长度
     Displayed(DWORD t, int b, size_t l) {
         tm = t;
         behavior = b;
         len = l;
     }
 };
+
+// replay — 在独立线程中回放录制的按键
 DWORD WINAPI replay(LPVOID ptr)
 {
     replayStatus = 1;
@@ -137,10 +151,14 @@ DWORD WINAPI replay(LPVOID ptr)
 #include <sstream>
 WCHAR logFile[MAX_PATH];
 FILE *logStream;
+// log — 调试日志输出
 void log(const std::stringstream & line) {
     fprintf(logStream,"%s",line.str().c_str());
 }
 #endif
+
+// stamp — 在品牌标识小窗口上绘制文本
+// 使用分层窗口 (UpdateLayeredWindow) 实现带透明度的文本渲染
 void stamp(HWND hwnd, LPCWSTR text) {
     RECT rt;
     GetWindowRect(hwnd,&rt);
@@ -165,11 +183,7 @@ void stamp(HWND hwnd, LPCWSTR text) {
 
     SolidBrush bgBrush(Color::Color(0xaf007cfe));
     g.FillRectangle(&bgBrush, rc);
-    SolidBrush textBrushPlus(Color(0xaf303030));
-    g.DrawString(text, wcslen(text), fontPlus, rc, &format, &textBrushPlus);
     SolidBrush brushPlus(Color::Color(0xaffefefe));
-    rc.X += 2;
-    rc.Y += 2;
     g.DrawString(text, wcslen(text), fontPlus, rc, &format, &brushPlus);
 
     POINT ptSrc = {0, 0};
@@ -184,6 +198,9 @@ void stamp(HWND hwnd, LPCWSTR text) {
     ::DeleteObject(memBitmap);
     ReleaseDC(hwnd, hdc);
 }
+// updateLayeredWindow — 将离屏画布刷新到分层窗口
+// gCanvas 先在内存 DC 中绘制，最后通过 UpdateLayeredWindow 一次性合成到屏幕，
+// 这样可以获得逐像素 Alpha 透明效果，并避免闪烁。
 void updateLayeredWindow(HWND hwnd) {
     POINT ptSrc = {0, 0};
     BLENDFUNCTION blendFunction;
@@ -197,6 +214,8 @@ void updateLayeredWindow(HWND hwnd) {
     ReleaseDC(hwnd, hdc);
     gCanvas->ReleaseHDC(hdcBuf);
 }
+// eraseLabel — 擦除指定标签的绘制区域
+// 用 clearColor（完全透明色）覆盖标签占据的矩形区域，包括边框范围
 void eraseLabel(int i) {
     RectF &rt = keyLabels[i].rect;
     RectF rc(rt.X-labelSettings.borderSize, rt.Y-labelSettings.borderSize, rt.Width+2*labelSettings.borderSize+1, rt.Height+2*labelSettings.borderSize+1);
@@ -204,6 +223,8 @@ void eraseLabel(int i) {
     gCanvas->Clear(clearColor);
     gCanvas->ResetClip();
 }
+// drawLabelFrame — 绘制标签的背景矩形和边框
+// cornerSize > 0 时绘制圆角矩形，否则绘制直角矩形
 void drawLabelFrame(Graphics* g, const Pen* pen, const Brush* brush, RectF &rc, REAL cornerSize) {
     if(cornerSize > 0) {
         GraphicsPath path;
@@ -221,7 +242,12 @@ void drawLabelFrame(Graphics* g, const Pen* pen, const Brush* brush, RectF &rc, 
         g->FillRectangle(brush, rc.X, rc.Y, rc.Width, rc.Height);
     }
 }
+// BR — 将 BGR 格式的 COLORREF 与 alpha 合成为 GDI+ ARGB 颜色值
+// Windows COLORREF 是 0x00BBGGRR，GDI+ Color 需要 0xAARRGGBB
 #define BR(alpha, bgr) (alpha<<24|bgr>>16|(bgr&0x0000ff00)|(bgr&0x000000ff)<<16)
+
+// updateLabel — 重新绘制指定索引的标签
+// 先擦除旧内容，再根据当前 time 计算淡出比例 r，绘制背景、边框和文字
 void updateLabel(int i) {
     eraseLabel(i);
 
@@ -251,15 +277,20 @@ void updateLabel(int i) {
     }
 }
 
+// fadeLastLabel — 设置最后一个标签的淡出标志
+// whether=TRUE 表示标签将在停留时间结束后开始淡出
+// whether=FALSE 表示标签保持显示（如修饰键持续按下时）
 void fadeLastLabel(BOOL whether) {
     keyLabels[labelCount-1].fade = whether;
 }
 
-static int newStrokeCount = 0;
-#define SHOWTIMER_INTERVAL 40
-static int deferredTime;
-WCHAR deferredLabel[64];
+static int newStrokeCount = 0;   // 新按键组合倒计时，用于判断后续按键是否合并到当前标签
+#define SHOWTIMER_INTERVAL 40    // 动画定时器间隔（毫秒），约 25 FPS
+static int deferredTime;         // 延迟标签的剩余等待时间
+WCHAR deferredLabel[64];         // 延迟标签文本（用于区分单击/双击，延迟显示鼠标按下）
 
+// startFade — 定时器回调，驱动所有标签的动画
+// 每次调用处理：延迟标签更新、标签时间递减、淡出绘制、过期标签清除
 static void startFade() {
     if(newStrokeCount > 0) {
         newStrokeCount -= SHOWTIMER_INTERVAL;
@@ -305,6 +336,8 @@ static void startFade() {
     }
 }
 
+// outOfLine — 检测追加文本后标签是否会超出画布宽度
+// 返回 true 表示追加后超出画布宽度，需要换行显示
 bool outOfLine(LPCWSTR text) {
     size_t newLen = wcslen(text);
     if(keyLabels[labelCount-1].text+keyLabels[labelCount-1].length+newLen >= textBufferEnd) {
@@ -321,9 +354,12 @@ bool outOfLine(LPCWSTR text) {
     return out;
 }
 /*
- * behavior 0: append text to last label
- * behavior 1: create a new label with text
- * behavior 2: replace last label with text
+ * showText — 将文本加入显示队列
+ *
+ * behavior 0: append text to last label（追加到上一行）
+ * behavior 1: create a new label with text（新建一行）
+ * behavior 2: replace last label with text（替换上一行）
+ * behavior 3: deferred label（延迟显示，用于鼠标按下事件，等待是否形成单击/双击）
  */
 void showText(LPCWSTR text, int behavior = 0) {
     SetWindowPos(hMainWnd,HWND_TOPMOST,0,0,0,0,SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE);
@@ -387,6 +423,9 @@ void showText(LPCWSTR text, int behavior = 0) {
     updateLayeredWindow(hMainWnd);
 }
 
+// updateCanvasSize — 根据显示原点重新计算画布尺寸和位置
+// pt 表示标签右下角/定位点，画布从当前工作区左侧延伸到 pt.x，
+// 高度覆盖整个工作区。定位变化时会清空现有标签。
 void updateCanvasSize(const POINT &pt) {
     for(DWORD i = 0; i < labelCount; i ++) {
         if(keyLabels[i].time > 0) {
@@ -408,6 +447,9 @@ void updateCanvasSize(const POINT &pt) {
     log(line);
 #endif
 }
+// createCanvas — 创建或重建离屏 GDI+ 画布
+// 根据当前工作区尺寸创建与屏幕等大的兼容位图，
+// 作为 Graphics 对象的绘制表面，用于分层窗口合成
 void createCanvas() {
     HDC hdc = GetDC(hMainWnd);
     HDC hdcBuffer = CreateCompatibleDC(hdc);
@@ -422,6 +464,10 @@ void createCanvas() {
     gCanvas->SetSmoothingMode(SmoothingModeAntiAlias);
     gCanvas->SetTextRenderingHint(TextRenderingHintAntiAlias);
 }
+// prepareLabels — 初始化标签数组布局
+// 根据当前字体大小、边框、间距计算可容纳的标签行数，
+// 受 maximumLines 限制，并在画布上设置每个标签的 Y 坐标位置。
+// 同时创建 GDI+ Font 对象并更新品牌标识窗口。
 void prepareLabels() {
     HDC hdc = GetDC(hMainWnd);
     HFONT hlabelFont = CreateFontIndirect(&labelSettings.font);
@@ -464,6 +510,8 @@ void prepareLabels() {
     stamp(hWndStamp, branding);
 }
 
+// GetWorkAreaByOrigin — 获取指定屏幕坐标所在显示器的工作区
+// 多显示器场景下用于确定标签应显示在哪个显示器上
 void GetWorkAreaByOrigin(const POINT &pt, MONITORINFO &mi) {
     RECT rc = {pt.x-1, pt.y-1, pt.x+1, pt.y+1};
     HMONITOR hMonitor = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
@@ -471,6 +519,9 @@ void GetWorkAreaByOrigin(const POINT &pt, MONITORINFO &mi) {
     GetMonitorInfo(hMonitor, &mi);
 }
 
+// positionOrigin — 处理显示区域定位交互
+// action=0: 拖拽中，实时更新画布尺寸并显示坐标；检测是否跨越显示器
+// action=其他: 拖拽结束，确认最终位置，清空画布完成定位
 void positionOrigin(int action, POINT &pt) {
     if (action == 0) {
         updateCanvasSize(pt);
@@ -504,6 +555,8 @@ void positionOrigin(int action, POINT &pt) {
         gCanvas->Clear(clearColor);
     }
 }
+// ColorDialog — 弹出 Windows 颜色选择对话框
+// 修改 clr 引用的颜色值，用户确认后更新
 BOOL ColorDialog ( HWND hWnd, COLORREF &clr ) {
     DWORD dwCustClrs[16] = {
         RGB(0,0,0),
@@ -539,6 +592,7 @@ BOOL ColorDialog ( HWND hWnd, COLORREF &clr ) {
     }
     return TRUE;
 }
+// CreateToolTip — 为对话框控件创建气泡提示
 HWND CreateToolTip(HWND hDlg, int toolID, LPWSTR pszText) {
     // Get the window of the tool.
     HWND hwndTool = GetDlgItem(hDlg, toolID);
@@ -566,11 +620,14 @@ HWND CreateToolTip(HWND hDlg, int toolID, LPWSTR pszText) {
 
     return hwndTip;
 }
+// writeSettingInt — 将一个 DWORD 值写入 INI 配置文件的 [KeyCastOW] 节
 void writeSettingInt(LPCTSTR lpKeyName, DWORD dw) {
     WCHAR tmp[256];
     swprintf(tmp, 256, L"%d", dw);
     WritePrivateProfileString(L"KeyCastOW", lpKeyName, tmp, iniFile);
 }
+// saveSettings — 将当前所有设置持久化到 INI 文件
+// 包括标签外观、功能开关、热键配置和品牌标识等
 void saveSettings() {
     writeSettingInt(L"keyStrokeDelay", labelSettings.keyStrokeDelay);
     writeSettingInt(L"lingerTime", labelSettings.lingerTime);
@@ -607,6 +664,8 @@ void saveSettings() {
     WritePrivateProfileString(L"KeyCastOW", L"branding", branding, iniFile);
     WritePrivateProfileString(L"KeyCastOW", L"comboChars", comboChars, iniFile);
 }
+// fixDeskOrigin — 修正显示原点，确保其位于当前工作区内
+// 当显示器配置变化或 INI 中保存的位置失效时使用
 void fixDeskOrigin() {
     if(deskOrigin.x > desktopRect.right || deskOrigin.x < desktopRect.left + labelSettings.borderSize) {
         deskOrigin.x = desktopRect.right - labelSettings.borderSize;
@@ -615,6 +674,9 @@ void fixDeskOrigin() {
         deskOrigin.y = desktopRect.bottom;
     }
 }
+// loadSettings — 从 INI 文件加载所有设置
+// 读取失败时使用硬编码的默认值。
+// 同时初始化桌面区域、窗口位置、标签字体和拖拽穿透属性。
 void loadSettings() {
     labelSettings.keyStrokeDelay = GetPrivateProfileInt(L"KeyCastOW", L"keyStrokeDelay", 500, iniFile);
     labelSettings.lingerTime = GetPrivateProfileInt(L"KeyCastOW", L"lingerTime", 1200, iniFile);
@@ -655,7 +717,7 @@ void loadSettings() {
     }
     tcModifiers = GetPrivateProfileInt(L"KeyCastOW", L"tcModifiers", MOD_ALT, iniFile);
     tcKey = GetPrivateProfileInt(L"KeyCastOW", L"tcKey", 0x42, iniFile);
-    GetPrivateProfileString(L"KeyCastOW", L"branding", L"Hi there, press any key to try, double click to configure.", branding, BRANDINGMAX, iniFile);
+    GetPrivateProfileString(L"KeyCastOW", L"branding", L"双击此处修改配置", branding, BRANDINGMAX, iniFile);
     GetPrivateProfileString(L"KeyCastOW", L"comboChars", L"<->", comboChars, 4, iniFile);
     memset(&labelSettings.font, 0, sizeof(labelSettings.font));
     labelSettings.font.lfCharSet = DEFAULT_CHARSET;
@@ -668,6 +730,8 @@ void loadSettings() {
     wcscpy_s(labelSettings.font.lfFaceName, LF_FACESIZE, TEXT("Arial Black"));
     GetPrivateProfileStruct(L"KeyCastOW", L"labelFont", &labelSettings.font, sizeof(labelSettings.font), iniFile);
 }
+// renderSettingsData — 将预览设置数据刷新到设置对话框的各控件
+// 使用 previewLabelSettings（而非 labelSettings），以便在确认前预览效果
 void renderSettingsData(HWND hwndDlg) {
     WCHAR tmp[256];
     swprintf(tmp, 256, L"%d", previewLabelSettings.keyStrokeDelay);
@@ -709,6 +773,8 @@ void renderSettingsData(HWND hwndDlg) {
     SetDlgItemText(hwndDlg, IDC_TCKEY, tmp);
     ComboBox_SetCurSel(GetDlgItem(hwndDlg, IDC_ALIGNMENT), alignment);
 }
+// getLabelSettings — 从设置对话框控件中读取当前值到 LabelSettings 结构
+// 仅读取数值型控件（延迟、停留、淡出、不透明度、边框、圆角）
 void getLabelSettings(HWND hwndDlg, LabelSettings &lblSettings) {
     WCHAR tmp[256];
     GetDlgItemText(hwndDlg, IDC_KEYSTROKEDELAY, tmp, 256);
@@ -734,8 +800,11 @@ void getLabelSettings(HWND hwndDlg, LabelSettings &lblSettings) {
     GetDlgItemText(hwndDlg, IDC_CORNERSIZE, tmp, 256);
     lblSettings.cornerSize = _wtoi(tmp);
 }
-DWORD previewTime = 0;
-#define PREVIEWTIMER_INTERVAL 5
+DWORD previewTime = 0;          // 预览动画计时器
+#define PREVIEWTIMER_INTERVAL 5  // 预览定时器间隔（毫秒）
+
+// previewLabel — 在设置对话框中渲染标签预览
+// 循环执行：保持显示 → 淡出 → 重置，让用户看到标签动画效果
 static void previewLabel() {
     RECT rt = {12, 58, 222, 238};
 
@@ -793,6 +862,10 @@ static void previewLabel() {
     ReleaseDC(hDlgSettings, hdc);
 }
 
+// SettingsWndProc — 设置对话框的窗口过程
+// 处理初始化、通知、按钮命令等消息。
+// 字体/颜色变更会立即预览；点击"确定"后保存所有设置。
+// 注意：IDOK（确定）缺少 break，会 fall through 到 IDCANCEL 关闭对话框。
 BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     WCHAR tmp[256];
@@ -939,6 +1012,8 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
     }
     return FALSE;
 }
+// DraggableWndProc — 品牌标识小窗口的窗口过程
+// 支持按住鼠标左键拖动标识位置，双击打开设置对话框
 LRESULT CALLBACK DraggableWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     static POINT s_last_mouse;
     switch(message)
@@ -978,6 +1053,8 @@ LRESULT CALLBACK DraggableWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
     return 0;
 }
 
+// WindowFunc — 主窗口窗口过程
+// 负责系统托盘菜单、热键切换、显示器变化、定位拖拽等应用级消息处理
 LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     static POINT s_last_mouse;
     static HMENU hPopMenu;
@@ -1121,6 +1198,8 @@ LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
     }
     return 0;
 }
+// MyRegisterClassEx — 注册窗口类
+// 用于主显示窗口和品牌标识窗口。启用 CS_DBLCLKS 以接收双击消息。
 ATOM MyRegisterClassEx(HINSTANCE hInst, LPCWSTR className, WNDPROC wndProc) {
     WNDCLASSEX wcl;
     wcl.cbSize = sizeof(WNDCLASSEX);
@@ -1138,6 +1217,8 @@ ATOM MyRegisterClassEx(HINSTANCE hInst, LPCWSTR className, WNDPROC wndProc) {
 
     return RegisterClassEx(&wcl);
 }
+// CreateMiniDump — 发生未处理异常时生成 MiniDump.dmp
+// 便于后续用调试器分析崩溃现场
 void CreateMiniDump( LPEXCEPTION_POINTERS lpExceptionInfo) {
     // Open a file
     HANDLE hFile = CreateFile(L"MiniDump.dmp", GENERIC_READ | GENERIC_WRITE,
@@ -1169,11 +1250,16 @@ void CreateMiniDump( LPEXCEPTION_POINTERS lpExceptionInfo) {
     }
 }
 
+// MyUnhandledExceptionFilter — 全局未处理异常过滤器
+// 捕获崩溃后写出 minidump，并交由系统执行异常处理流程
 LONG __stdcall MyUnhandledExceptionFilter(PEXCEPTION_POINTERS pExceptionInfo)
 {
     CreateMiniDump(pExceptionInfo);
     return EXCEPTION_EXECUTE_HANDLER;
 }
+// WinMain — 应用程序入口
+// 初始化公共控件、GDI+、主窗口、设置对话框、托盘图标、热键、键鼠钩子，
+// 然后进入消息循环。退出时释放钩子、热键、GDI+ 对象和调试文件流。
 int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
         LPSTR lpszArgs, int nWinMode)
 {
