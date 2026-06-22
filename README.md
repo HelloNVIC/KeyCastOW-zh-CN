@@ -1,7 +1,7 @@
 # KeyCastOW-zh-CN · KeyCastOW 中文版
 
 <p align="center">
-  <img src="https://imagehost.ckh-cn.site/i/2026/06/22/uhft82.png" alt="运行效果" width="760">
+  <img src="image.png" alt="运行效果" width="500">
 </p>
 
 <p align="center">
@@ -52,12 +52,6 @@
 | 🚀 开机启动 | 可在设置中勾选“开机自动启动”，登录 Windows 后自动运行 |
 | 🧩 原生轻量 | Windows 原生 API + GDI+ 渲染，无额外运行时依赖 |
 | 💾 配置持久化 | 设置自动写入 INI 文件，重启后恢复 |
-
-## 🖼️ 界面预览
-
-<p align="center">
-  <img src="https://imagehost.ckh-cn.site/i/2026/06/22/ufkybc.png" alt="演示" width="300">
-</p>
 
 ## 📦 快速开始
 
@@ -113,7 +107,6 @@
 
 ### 环境要求
 
-- Windows
 - Visual Studio / Microsoft C++ Build Tools
 - Win32 / x86 或 x64 目标平台
 - Unicode 字符集

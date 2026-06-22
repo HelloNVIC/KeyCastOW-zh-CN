@@ -1001,7 +1001,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                         desktopRect.right - desktopRect.left - settingsDlgRect.right + settingsDlgRect.left,
                         desktopRect.bottom - desktopRect.top - settingsDlgRect.bottom + settingsDlgRect.top, 0, 0, SWP_NOSIZE);
                 GetWindowRect(hwndDlg, &settingsDlgRect);
-                CreateToolTip(hwndDlg, IDC_COMBSCHEME, L"[+] to display combination keys like [Alt + Tab].");
+                CreateToolTip(hwndDlg, IDC_STATIC_ComBIne, L"点击显示组合字符输入帮助");
                 HWND hCtrl = GetDlgItem(hwndDlg, IDC_ALIGNMENT);
                 ComboBox_InsertString(hCtrl, 0, L"左对齐");
                 ComboBox_InsertString(hCtrl, 1, L"右对齐");
@@ -1025,6 +1025,21 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
         case WM_COMMAND:
             switch (LOWORD(wParam))
             {
+                case IDC_STATIC_ComBIne:
+                    MessageBox(hwndDlg,
+                        L"组合字符用于设置组合键的显示格式。\n\n"
+                        L"请输入 3 个字符：\n"
+                        L"第 1 个字符：左包含符号\n"
+                        L"第 2 个字符：组合键连接符\n"
+                        L"第 3 个字符：右包含符号\n\n"
+                        L"示例：\n"
+                        L"[+]  显示为 [Alt + Tab]\n"
+                        L"<->  显示为 <Alt - Tab>\n"
+                        L"(+)  显示为 (Alt + Tab)\n\n"
+                        L"请尽量输入正好 3 个字符。",
+                        L"组合字符输入帮助",
+                        MB_OK | MB_ICONINFORMATION);
+                    return TRUE;
                 case IDC_TEXTFONT:
                     {
                         CHOOSEFONT cf ;
@@ -1504,7 +1519,7 @@ int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
     createCanvas();
     prepareLabels();
     ShowWindow(hMainWnd, SW_SHOW);
-    HFONT hlabelFont = CreateFont(20,10,0,0,FW_BLACK,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,
+    HFONT hlabelFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,
                 CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY, VARIABLE_PITCH,TEXT("Arial"));
     HWND hlink = GetDlgItem(hDlgSettings, IDC_SYSLINK1);
     SendMessage(hlink, WM_SETFONT, (WPARAM)hlabelFont, TRUE);
