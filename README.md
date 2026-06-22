@@ -1,7 +1,7 @@
 # KeyCastOW-zh-CN · KeyCastOW 中文版
 
 <p align="center">
-  <img src="https://imagehost.ckh-cn.site/i/2026/06/22/uhft82.png" alt="NVIC-KeyCast 运行效果" width="760">
+  <img src="https://imagehost.ckh-cn.site/i/2026/06/22/uhft82.png" alt="运行效果" width="760">
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@
 ## 🖼️ 界面预览
 
 <p align="center">
-  <img src="https://imagehost.ckh-cn.site/i/2026/06/22/ufkybc.png" alt="NVIC-KeyCast 设置界面" width="760">
+  <img src="https://imagehost.ckh-cn.site/i/2026/06/22/ufkybc.png" alt="演示" width="300">
 </p>
 
 ## 📦 快速开始
