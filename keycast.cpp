@@ -75,6 +75,7 @@ BOOL keyAutoRepeat = TRUE;   // 是否允许按键自动重复显示（长按连
 BOOL mergeMouseActions = TRUE; // 是否合并鼠标按下/释放为单击/双击
 int alignment = 1;           // 对齐方式：0=左对齐，1=右对齐
 BOOL down = FALSE;            // 是否从定位点向下增长显示标签
+BOOL autoRun = FALSE;         // 是否开机自动启动
 BOOL onlyCommandKeys = FALSE; // 是否仅显示组合键（含修饰键的按键）
 BOOL positioning = FALSE;    // 是否处于定位模式（用户拖拽调整显示区域）
 BOOL draggableLabel = FALSE; // 标签是否可拖拽
@@ -103,6 +104,7 @@ HWND hDlgSettings;       // 设置对话框句柄
 RECT settingsDlgRect;    // 设置对话框位置
 HWND hWndStamp;          // 品牌/配置标识小窗口句柄（可拖拽）
 HINSTANCE hInstance;     // 应用程序实例句柄
+HANDLE hSingleInstanceMutex = NULL;  // 单实例互斥量，防止重复运行
 Graphics * gCanvas = NULL;  // GDI+ 画布 Graphics 对象
 Font * fontPlus = NULL;     // GDI+ 字体对象（由 labelSettings.font 创建）
 
@@ -175,6 +177,15 @@ void log(const std::stringstream & line) {
 // stamp — 在品牌标识小窗口上绘制文本
 // 使用分层窗口 (UpdateLayeredWindow) 实现带透明度的文本渲染
 void stamp(HWND hwnd, LPCWSTR text) {
+    if(hwnd == NULL) {
+        return;
+    }
+    if(text == NULL || text[0] == L'\0') {
+        ShowWindow(hwnd, SW_HIDE);
+        return;
+    }
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
     RECT rt;
     GetWindowRect(hwnd,&rt);
     HDC hdc = GetDC(hwnd);
@@ -647,6 +658,52 @@ void writeSettingInt(LPCTSTR lpKeyName, DWORD dw) {
     swprintf(tmp, 256, L"%d", dw);
     WritePrivateProfileString(L"KeyCastOW", lpKeyName, tmp, iniFile);
 }
+
+// isAutoRunEnabled — 检查当前用户开机启动注册表项是否存在
+BOOL isAutoRunEnabled() {
+    HKEY hKey;
+    LONG ret = RegOpenKeyEx(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            0, KEY_QUERY_VALUE, &hKey);
+    if(ret != ERROR_SUCCESS) {
+        return FALSE;
+    }
+
+    ret = RegQueryValueEx(hKey, L"NVIC-KeyCast", NULL, NULL, NULL, NULL);
+    RegCloseKey(hKey);
+    return ret == ERROR_SUCCESS;
+}
+
+// updateAutoRun — 写入或删除当前用户开机启动注册表项
+void updateAutoRun() {
+    HKEY hKey;
+    LONG ret = RegCreateKeyEx(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL);
+    if(ret != ERROR_SUCCESS) {
+        MessageBox(NULL, L"无法更新开机自动启动设置", L"警告", MB_OK|MB_ICONWARNING);
+        return;
+    }
+
+    if(autoRun) {
+        WCHAR exePath[MAX_PATH];
+        WCHAR runValue[MAX_PATH+2];
+        GetModuleFileName(NULL, exePath, MAX_PATH);
+        swprintf(runValue, MAX_PATH+2, L"\"%s\"", exePath);
+        ret = RegSetValueEx(hKey, L"NVIC-KeyCast", 0, REG_SZ, (BYTE*)runValue, (wcslen(runValue)+1)*sizeof(WCHAR));
+    } else {
+        ret = RegDeleteValue(hKey, L"NVIC-KeyCast");
+        if(ret == ERROR_FILE_NOT_FOUND) {
+            ret = ERROR_SUCCESS;
+        }
+    }
+    RegCloseKey(hKey);
+
+    if(ret != ERROR_SUCCESS) {
+        MessageBox(NULL, L"无法更新开机自动启动设置", L"警告", MB_OK|MB_ICONWARNING);
+    }
+}
+
 // saveSettings — 将当前所有设置持久化到 INI 文件
 // 包括标签外观、功能开关、热键配置和品牌标识等
 void saveSettings() {
@@ -674,6 +731,8 @@ void saveSettings() {
     writeSettingInt(L"mergeMouseActions", mergeMouseActions);
     writeSettingInt(L"alignment", alignment);
     writeSettingInt(L"down", down);
+    writeSettingInt(L"autoRun", autoRun);
+    updateAutoRun();
     writeSettingInt(L"onlyCommandKeys", onlyCommandKeys);
     writeSettingInt(L"draggableLabel", draggableLabel);
     if (draggableLabel) {
@@ -736,6 +795,7 @@ void loadSettings() {
     mergeMouseActions = GetPrivateProfileInt(L"KeyCastOW", L"mergeMouseActions", 1, iniFile);
     alignment = GetPrivateProfileInt(L"KeyCastOW", L"alignment", 1, iniFile);
     down = GetPrivateProfileInt(L"KeyCastOW", L"down", 0, iniFile);
+    autoRun = GetPrivateProfileInt(L"KeyCastOW", L"autoRun", isAutoRunEnabled(), iniFile);
     onlyCommandKeys = GetPrivateProfileInt(L"KeyCastOW", L"onlyCommandKeys", 0, iniFile);
     draggableLabel = GetPrivateProfileInt(L"KeyCastOW", L"draggableLabel", 0, iniFile);
     if (draggableLabel) {
@@ -810,6 +870,7 @@ void renderSettingsData(HWND hwndDlg) {
     CheckDlgButton(hwndDlg, IDC_ONLYCOMMANDKEYS, onlyCommandKeys ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_DRAGGABLELABEL, draggableLabel ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_DOWN, down ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hwndDlg, IDC_AUTORUN, autoRun ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_MODCTRL, (tcModifiers & MOD_CONTROL) ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_MODALT, (tcModifiers & MOD_ALT) ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_MODSHIFT, (tcModifiers & MOD_SHIFT) ? BST_CHECKED : BST_UNCHECKED);
@@ -1077,6 +1138,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                     onlyCommandKeys = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_ONLYCOMMANDKEYS));
                     draggableLabel = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_DRAGGABLELABEL));
                     down = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_DOWN));
+                    autoRun = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_AUTORUN));
                     tcModifiers = 0;
                     if(BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_MODCTRL)) {
                         tcModifiers |= MOD_CONTROL;
@@ -1096,7 +1158,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                         tcKey = VkKeyScanEx(tmp[0], GetKeyboardLayout(0));
                         UnregisterHotKey(NULL, 1);
                         if (!RegisterHotKey( NULL, 1, tcModifiers | MOD_NOREPEAT, tcKey)) {
-                            MessageBox(NULL, L"Unable to register hotkey, you probably need go to settings to redefine your hotkey for toggle capturing.", L"Warning", MB_OK|MB_ICONWARNING);
+                            MessageBox(NULL, L"无法注册快捷键，请在设置中重新定义输入捕获开关快捷键。", L"警告", MB_OK|MB_ICONWARNING);
                         }
                     }
                     updateCanvasSize(deskOrigin);
@@ -1367,6 +1429,15 @@ int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
 
     hInstance = hThisInst;
 
+    hSingleInstanceMutex = CreateMutex(NULL, TRUE, L"NVIC-KeyCast-SingleInstance");
+    if(hSingleInstanceMutex == NULL || GetLastError() == ERROR_ALREADY_EXISTS) {
+        MessageBox(NULL, L"已经有正在运行的实例", L"提示", MB_OK|MB_ICONINFORMATION);
+        if(hSingleInstanceMutex != NULL) {
+            CloseHandle(hSingleInstanceMutex);
+        }
+        return 0;
+    }
+
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_LINK_CLASS|ICC_LISTVIEW_CLASSES|ICC_PAGESCROLLER_CLASS
@@ -1394,7 +1465,7 @@ int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
     GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
     if(!MyRegisterClassEx(hThisInst, szWinName, WindowFunc)) {
-        MessageBox(NULL, L"Could not register window class", L"Error", MB_OK);
+        MessageBox(NULL, L"无法注册窗口类", L"错误", MB_OK);
         return 0;
     }
 
@@ -1411,7 +1482,7 @@ int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
             NULL
             );
     if( !hMainWnd)    {
-        MessageBox(NULL, L"Could not create window", L"Error", MB_OK);
+        MessageBox(NULL, L"无法创建窗口", L"错误", MB_OK);
         return 0;
     }
 
@@ -1426,7 +1497,7 @@ int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
             NULL, NULL, hThisInst, NULL);
 
     if (!RegisterHotKey( NULL, 1, tcModifiers | MOD_NOREPEAT, tcKey)) {
-        MessageBox(NULL, L"Unable to register hotkey, you probably need go to settings to redefine your hotkey for toggle capturing.", L"Warning", MB_OK|MB_ICONWARNING);
+        MessageBox(NULL, L"无法注册快捷键，请在设置中重新定义输入捕获开关快捷键。", L"警告", MB_OK|MB_ICONWARNING);
     }
     UpdateWindow(hMainWnd);
 
@@ -1470,6 +1541,10 @@ int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
     UnhookWindowsHookEx(kbdhook);
     UnhookWindowsHookEx(moshook);
     UnregisterHotKey(NULL, 1);
+    if(hSingleInstanceMutex != NULL) {
+        ReleaseMutex(hSingleInstanceMutex);
+        CloseHandle(hSingleInstanceMutex);
+    }
     delete gCanvas;
     delete fontPlus;
 #ifdef _DEBUG

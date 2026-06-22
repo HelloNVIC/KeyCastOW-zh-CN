@@ -44,8 +44,8 @@
 #define IDC_POSITION                    1039
 #define IDC_DRAGGABLELABEL              1040
 #define IDC_DOWN                        1041
-#define IDC_DOWN2                       1042
-#define IDC_SPLIT                       1042
+#define IDC_DOWN2                       1043
+#define IDC_AUTORUN                     1043
 
 // Next default values for new objects
 // 
