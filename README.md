@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/brookhong/KeyCastOW"><img alt="Based on KeyCastOW" src="https://img.shields.io/badge/Based%20on-KeyCastOW-blue"></a>
   <img alt="Windows" src="https://img.shields.io/badge/Platform-Windows-0078D4">
-  <img alt="Win32" src="https://img.shields.io/badge/Target-Win32%20%2F%20x86-orange">
+  <img alt="Architecture" src="https://img.shields.io/badge/Target-x86%20%2F%20x64-orange">
   <img alt="License" src="https://img.shields.io/badge/License-MIT-green">
   <img alt="Language" src="https://img.shields.io/badge/Language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red">
 </p>
@@ -115,7 +115,7 @@
 
 - Windows
 - Visual Studio / Microsoft C++ Build Tools
-- Win32 / x86 目标平台
+- Win32 / x86 或 x64 目标平台
 - Unicode 字符集
 
 ### Release 构建
@@ -124,18 +124,21 @@
 
 ```bat
 msbuild keycastow.vcxproj /p:Platform=Win32 /p:Configuration=Release
+msbuild keycastow.vcxproj /p:Platform=x64 /p:Configuration=Release
 ```
 
 如果本机存在多个平台工具集，也可以显式指定：
 
 ```bat
 msbuild keycastow.vcxproj /p:Platform=Win32 /p:Configuration=Release /p:PlatformToolset=v145
+msbuild keycastow.vcxproj /p:Platform=x64 /p:Configuration=Release /p:PlatformToolset=v145
 ```
 
 构建成功后，输出文件位于：
 
 ```text
-Release\keycastow.exe
+Release\keycastow.exe      # x86 / Win32
+x64\Release\keycastow.exe  # x64
 ```
 
 ## 📁 项目结构
