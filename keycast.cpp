@@ -74,6 +74,7 @@ BOOL mouseCapturingMod = FALSE; // 是否仅在修饰键按下时捕获鼠标
 BOOL keyAutoRepeat = TRUE;   // 是否允许按键自动重复显示（长按连续触发）
 BOOL mergeMouseActions = TRUE; // 是否合并鼠标按下/释放为单击/双击
 int alignment = 1;           // 对齐方式：0=左对齐，1=右对齐
+BOOL down = FALSE;            // 是否从定位点向下增长显示标签
 BOOL onlyCommandKeys = FALSE; // 是否仅显示组合键（含修饰键的按键）
 BOOL positioning = FALSE;    // 是否处于定位模式（用户拖拽调整显示区域）
 BOOL draggableLabel = FALSE; // 标签是否可拖拽
@@ -449,7 +450,7 @@ void updateCanvasSize(const POINT &pt) {
         }
     }
     canvasSize.cy = desktopRect.bottom - desktopRect.top;
-    canvasOrigin.y = pt.y - desktopRect.bottom + desktopRect.top;
+    canvasOrigin.y = down ? pt.y : pt.y - desktopRect.bottom + desktopRect.top;
     canvasSize.cx = pt.x - desktopRect.left;
     canvasOrigin.x = desktopRect.left;
 
@@ -512,13 +513,18 @@ void prepareLabels() {
 
     gCanvas->Clear(clearColor);
     for(DWORD i = 0; i < labelCount; i ++) {
-        keyLabels[i].rect.X = (REAL)labelSettings.borderSize;
-        keyLabels[i].rect.Y = paddingH + unitH*(i+offset) + labelSpacing + labelSettings.borderSize;
-        if(keyLabels[i].time > (int)(labelSettings.lingerTime+labelSettings.fadeDuration)) {
-            keyLabels[i].time = labelSettings.lingerTime+labelSettings.fadeDuration;
+        DWORD labelIndex = down ? labelCount - i - 1 : i;
+        keyLabels[labelIndex].rect.X = (REAL)labelSettings.borderSize;
+        if(down) {
+            keyLabels[labelIndex].rect.Y = unitH*i + labelSpacing + labelSettings.borderSize;
+        } else {
+            keyLabels[labelIndex].rect.Y = paddingH + unitH*(i+offset) + labelSpacing + labelSettings.borderSize;
         }
-        if(keyLabels[i].time > 0) {
-            updateLabel(i);
+        if(keyLabels[labelIndex].time > (int)(labelSettings.lingerTime+labelSettings.fadeDuration)) {
+            keyLabels[labelIndex].time = labelSettings.lingerTime+labelSettings.fadeDuration;
+        }
+        if(keyLabels[labelIndex].time > 0) {
+            updateLabel(labelIndex);
         }
     }
 
@@ -667,6 +673,7 @@ void saveSettings() {
     writeSettingInt(L"keyAutoRepeat", keyAutoRepeat);
     writeSettingInt(L"mergeMouseActions", mergeMouseActions);
     writeSettingInt(L"alignment", alignment);
+    writeSettingInt(L"down", down);
     writeSettingInt(L"onlyCommandKeys", onlyCommandKeys);
     writeSettingInt(L"draggableLabel", draggableLabel);
     if (draggableLabel) {
@@ -701,15 +708,15 @@ void loadSettings() {
     labelSettings.keyStrokeDelay = GetPrivateProfileInt(L"KeyCastOW", L"keyStrokeDelay", 500, iniFile);
     labelSettings.lingerTime = GetPrivateProfileInt(L"KeyCastOW", L"lingerTime", 1200, iniFile);
     labelSettings.fadeDuration = GetPrivateProfileInt(L"KeyCastOW", L"fadeDuration", 310, iniFile);
-    labelSettings.bgColor = GetPrivateProfileInt(L"KeyCastOW", L"bgColor", RGB(75, 75, 75), iniFile);
-    labelSettings.textColor = GetPrivateProfileInt(L"KeyCastOW", L"textColor", RGB(255, 255, 255), iniFile);
-    labelSettings.bgOpacity = GetPrivateProfileInt(L"KeyCastOW", L"bgOpacity", 200, iniFile);
+    labelSettings.bgColor = GetPrivateProfileInt(L"KeyCastOW", L"bgColor", RGB(17, 24, 39), iniFile);
+    labelSettings.textColor = GetPrivateProfileInt(L"KeyCastOW", L"textColor", RGB(248, 250, 252), iniFile);
+    labelSettings.bgOpacity = GetPrivateProfileInt(L"KeyCastOW", L"bgOpacity", 224, iniFile);
     labelSettings.textOpacity = GetPrivateProfileInt(L"KeyCastOW", L"textOpacity", 255, iniFile);
-    labelSettings.borderOpacity = GetPrivateProfileInt(L"KeyCastOW", L"borderOpacity", 200, iniFile);
-    labelSettings.borderColor = GetPrivateProfileInt(L"KeyCastOW", L"borderColor", RGB(0, 128, 255), iniFile);
-    labelSettings.borderSize = GetPrivateProfileInt(L"KeyCastOW", L"borderSize", 8, iniFile);
-    labelSettings.cornerSize = GetPrivateProfileInt(L"KeyCastOW", L"cornerSize", 2, iniFile);
-    labelSpacing = GetPrivateProfileInt(L"KeyCastOW", L"labelSpacing", 1, iniFile);
+    labelSettings.borderOpacity = GetPrivateProfileInt(L"KeyCastOW", L"borderOpacity", 235, iniFile);
+    labelSettings.borderColor = GetPrivateProfileInt(L"KeyCastOW", L"borderColor", RGB(232, 93, 63), iniFile);
+    labelSettings.borderSize = GetPrivateProfileInt(L"KeyCastOW", L"borderSize", 3, iniFile);
+    labelSettings.cornerSize = GetPrivateProfileInt(L"KeyCastOW", L"cornerSize", 16, iniFile);
+    labelSpacing = GetPrivateProfileInt(L"KeyCastOW", L"labelSpacing", 6, iniFile);
     maximumLines = GetPrivateProfileInt(L"KeyCastOW", L"maximumLines", 10, iniFile);
     if (maximumLines == 0) {
         maximumLines = 1;
@@ -728,6 +735,7 @@ void loadSettings() {
     keyAutoRepeat = GetPrivateProfileInt(L"KeyCastOW", L"keyAutoRepeat", 1, iniFile);
     mergeMouseActions = GetPrivateProfileInt(L"KeyCastOW", L"mergeMouseActions", 1, iniFile);
     alignment = GetPrivateProfileInt(L"KeyCastOW", L"alignment", 1, iniFile);
+    down = GetPrivateProfileInt(L"KeyCastOW", L"down", 0, iniFile);
     onlyCommandKeys = GetPrivateProfileInt(L"KeyCastOW", L"onlyCommandKeys", 0, iniFile);
     draggableLabel = GetPrivateProfileInt(L"KeyCastOW", L"draggableLabel", 0, iniFile);
     if (draggableLabel) {
@@ -746,13 +754,13 @@ void loadSettings() {
     GetPrivateProfileString(L"KeyCastOW", L"comboChars", L"<->", comboChars, 4, iniFile);
     memset(&labelSettings.font, 0, sizeof(labelSettings.font));
     labelSettings.font.lfCharSet = DEFAULT_CHARSET;
-    labelSettings.font.lfHeight = -37;
+    labelSettings.font.lfHeight = -34;
     labelSettings.font.lfPitchAndFamily = DEFAULT_PITCH;
-    labelSettings.font.lfWeight  = FW_BLACK;
+    labelSettings.font.lfWeight  = FW_SEMIBOLD;
     labelSettings.font.lfOutPrecision = OUT_DEFAULT_PRECIS;
     labelSettings.font.lfClipPrecision = CLIP_DEFAULT_PRECIS;
     labelSettings.font.lfQuality = ANTIALIASED_QUALITY;
-    wcscpy_s(labelSettings.font.lfFaceName, LF_FACESIZE, TEXT("Arial Black"));
+    wcscpy_s(labelSettings.font.lfFaceName, LF_FACESIZE, TEXT("Microsoft YaHei UI"));
     GetPrivateProfileStruct(L"KeyCastOW", L"labelFont", &labelSettings.font, sizeof(labelSettings.font), iniFile);
     CopyMemory(&brandingSettings.font, &labelSettings.font, sizeof(brandingSettings.font));
     brandingSettings.font.lfHeight = -20;
@@ -801,6 +809,7 @@ void renderSettingsData(HWND hwndDlg) {
     CheckDlgButton(hwndDlg, IDC_MERGEMOUSEACTIONS, mergeMouseActions ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_ONLYCOMMANDKEYS, onlyCommandKeys ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_DRAGGABLELABEL, draggableLabel ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hwndDlg, IDC_DOWN, down ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_MODCTRL, (tcModifiers & MOD_CONTROL) ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_MODALT, (tcModifiers & MOD_ALT) ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwndDlg, IDC_MODSHIFT, (tcModifiers & MOD_SHIFT) ? BST_CHECKED : BST_UNCHECKED);
@@ -888,7 +897,7 @@ static void previewLabel() {
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetTextRenderingHint(TextRenderingHintAntiAlias);
 
-    WCHAR text[] = L"BH";
+    WCHAR text[] = L"字A";
     HFONT hFont = CreateFontIndirect(&previewLabelSettings.font);
     SelectObject(memDC, hFont);
     Font font(memDC, hFont);
@@ -933,8 +942,8 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                 GetWindowRect(hwndDlg, &settingsDlgRect);
                 CreateToolTip(hwndDlg, IDC_COMBSCHEME, L"[+] to display combination keys like [Alt + Tab].");
                 HWND hCtrl = GetDlgItem(hwndDlg, IDC_ALIGNMENT);
-                ComboBox_InsertString(hCtrl, 0, L"Left");
-                ComboBox_InsertString(hCtrl, 1, L"Right");
+                ComboBox_InsertString(hCtrl, 0, L"左对齐");
+                ComboBox_InsertString(hCtrl, 1, L"右对齐");
             }
             return TRUE;
         case WM_NOTIFY:
@@ -1032,6 +1041,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                 case IDC_POSITION:
                     {
                         alignment = ComboBox_GetCurSel(GetDlgItem(hwndDlg, IDC_ALIGNMENT));
+                        down = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_DOWN));
                         clearColor.SetValue(0x7f7f7f7f);
                         gCanvas->Clear(clearColor);
                         showText(L"\u254b", 1);
@@ -1066,6 +1076,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                     mergeMouseActions = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_MERGEMOUSEACTIONS));
                     onlyCommandKeys = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_ONLYCOMMANDKEYS));
                     draggableLabel = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_DRAGGABLELABEL));
+                    down = (BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_DOWN));
                     tcModifiers = 0;
                     if(BST_CHECKED == IsDlgButtonChecked(hwndDlg, IDC_MODCTRL)) {
                         tcModifiers |= MOD_CONTROL;
@@ -1088,6 +1099,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                             MessageBox(NULL, L"Unable to register hotkey, you probably need go to settings to redefine your hotkey for toggle capturing.", L"Warning", MB_OK|MB_ICONWARNING);
                         }
                     }
+                    updateCanvasSize(deskOrigin);
                     prepareLabels();
                     saveSettings();
                     return TRUE;
@@ -1159,16 +1171,16 @@ LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
                 nid.uFlags              = NIF_ICON | NIF_MESSAGE | NIF_TIP;
                 nid.uCallbackMessage    = WM_TRAYMSG;
                 nid.hIcon = LoadIcon( hInstance, MAKEINTRESOURCE(IDI_ICON1));
-                lstrcpy( nid.szTip, L"KeyCast On Windows by brook hong" );
+                lstrcpy( nid.szTip, L"KeyCastOW 按键显示工具-NVIC" );
                 Shell_NotifyIcon( NIM_ADD, &nid );
 
                 hPopMenu = CreatePopupMenu();
-                AppendMenu( hPopMenu, MF_STRING, MENU_CONFIG,  L"&Settings..." );
-                AppendMenu( hPopMenu, MF_STRING, MENU_RESTORE,  L"&Restore default settings" );
+                AppendMenu( hPopMenu, MF_STRING, MENU_CONFIG,  L"设置(&S)..." );
+                AppendMenu( hPopMenu, MF_STRING, MENU_RESTORE,  L"恢复默认设置(&R)" );
 #ifdef _DEBUG
-                AppendMenu( hPopMenu, MF_STRING, MENU_REPLAY,  L"Re&play" );
+                AppendMenu( hPopMenu, MF_STRING, MENU_REPLAY,  L"回放(&P)" );
 #endif
-                AppendMenu( hPopMenu, MF_STRING, MENU_EXIT,    L"E&xit" );
+                AppendMenu( hPopMenu, MF_STRING, MENU_EXIT,    L"退出(&X)" );
                 SetMenuDefaultItem( hPopMenu, MENU_CONFIG, FALSE );
             }
             break;
