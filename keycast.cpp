@@ -56,6 +56,16 @@ struct LabelSettings {
     int cornerSize;         // 圆角半径（像素），0 为直角矩形
 };
 LabelSettings labelSettings, previewLabelSettings;  // 当前生效设置 / 设置对话框预览设置
+
+// BrandingSettings — 品牌标识外观设置
+// 包含字体、颜色、不透明度和背景留白大小等参数
+struct BrandingSettings {
+    LOGFONT font;           // 品牌标识字体（GDI LOGFONT 结构）
+    COLORREF bgColor, textColor;  // 背景色、文字色（BGR 格式）
+    DWORD bgOpacity;        // 背景不透明度（0~255）
+    int borderSize;         // 背景留白大小（像素）
+};
+BrandingSettings brandingSettings, previewBrandingSettings;  // 当前生效设置 / 设置对话框预览设置
 DWORD labelSpacing;        // 标签行间距（像素）
 BOOL visibleShift = FALSE;  // 是否单独显示 Shift 键（默认不单独显示）
 BOOL visibleModifier = TRUE; // 是否单独显示修饰键（Ctrl/Alt/Win）
@@ -157,6 +167,10 @@ void log(const std::stringstream & line) {
 }
 #endif
 
+// BR — 将 BGR 格式的 COLORREF 与 alpha 合成为 GDI+ ARGB 颜色值
+// Windows COLORREF 是 0x00BBGGRR，GDI+ Color 需要 0xAARRGGBB
+#define BR(alpha, bgr) (alpha<<24|bgr>>16|(bgr&0x0000ff00)|(bgr&0x000000ff)<<16)
+
 // stamp — 在品牌标识小窗口上绘制文本
 // 使用分层窗口 (UpdateLayeredWindow) 实现带透明度的文本渲染
 void stamp(HWND hwnd, LPCWSTR text) {
@@ -171,20 +185,24 @@ void stamp(HWND hwnd, LPCWSTR text) {
     g.SetTextRenderingHint(TextRenderingHintAntiAlias);
     g.Clear(clearColor);
 
-    RectF rc((REAL)labelSettings.borderSize, (REAL)labelSettings.borderSize, 0.0, 0.0);
-    SizeF stringSize, layoutSize((REAL)desktopRect.right - desktopRect.left-2*labelSettings.borderSize, (REAL)desktopRect.bottom - desktopRect.top-2*labelSettings.borderSize);
+    HFONT hStampFont = CreateFontIndirect(&brandingSettings.font);
+    SelectObject(memDC, hStampFont);
+    Font stampFont(memDC, hStampFont);
+
+    RectF rc((REAL)brandingSettings.borderSize, (REAL)brandingSettings.borderSize, 0.0, 0.0);
+    SizeF stringSize, layoutSize((REAL)desktopRect.right - desktopRect.left-2*brandingSettings.borderSize, (REAL)desktopRect.bottom - desktopRect.top-2*brandingSettings.borderSize);
     StringFormat format;
     format.SetAlignment(StringAlignmentCenter);
-    g.MeasureString(text, wcslen(text), fontPlus, layoutSize, &format, &stringSize);
+    g.MeasureString(text, wcslen(text), &stampFont, layoutSize, &format, &stringSize);
     rc.Width = stringSize.Width;
     rc.Height = stringSize.Height;
-    SIZE wndSize = {2*labelSettings.borderSize+(LONG)rc.Width, 2*labelSettings.borderSize+(LONG)rc.Height};
+    SIZE wndSize = {2*brandingSettings.borderSize+(LONG)rc.Width, 2*brandingSettings.borderSize+(LONG)rc.Height};
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, wndSize.cx, wndSize.cy, SWP_NOMOVE|SWP_NOACTIVATE);
 
-    SolidBrush bgBrush(Color::Color(0xaf007cfe));
-    g.FillRectangle(&bgBrush, rc);
-    SolidBrush brushPlus(Color::Color(0xaffefefe));
-    g.DrawString(text, wcslen(text), fontPlus, rc, &format, &brushPlus);
+    SolidBrush bgBrush(Color::Color(BR(brandingSettings.bgOpacity, brandingSettings.bgColor)));
+    g.FillRectangle(&bgBrush, 0.0f, 0.0f, (REAL)wndSize.cx, (REAL)wndSize.cy);
+    SolidBrush brushPlus(Color::Color(BR(255, brandingSettings.textColor)));
+    g.DrawString(text, wcslen(text), &stampFont, rc, &format, &brushPlus);
 
     POINT ptSrc = {0, 0};
     POINT ptDst = {rt.left, rt.top};
@@ -196,6 +214,7 @@ void stamp(HWND hwnd, LPCWSTR text) {
     ::UpdateLayeredWindow(hwnd,hdc,&ptDst,&wndSize,memDC,&ptSrc,0,&blendFunction,2);
     ::DeleteDC(memDC);
     ::DeleteObject(memBitmap);
+    DeleteObject(hStampFont);
     ReleaseDC(hwnd, hdc);
 }
 // updateLayeredWindow — 将离屏画布刷新到分层窗口
@@ -242,10 +261,6 @@ void drawLabelFrame(Graphics* g, const Pen* pen, const Brush* brush, RectF &rc, 
         g->FillRectangle(brush, rc.X, rc.Y, rc.Width, rc.Height);
     }
 }
-// BR — 将 BGR 格式的 COLORREF 与 alpha 合成为 GDI+ ARGB 颜色值
-// Windows COLORREF 是 0x00BBGGRR，GDI+ Color 需要 0xAARRGGBB
-#define BR(alpha, bgr) (alpha<<24|bgr>>16|(bgr&0x0000ff00)|(bgr&0x000000ff)<<16)
-
 // updateLabel — 重新绘制指定索引的标签
 // 先擦除旧内容，再根据当前 time 计算淡出比例 r，绘制背景、边框和文字
 void updateLabel(int i) {
@@ -311,7 +326,7 @@ static void startFade() {
 
     for(i = 0; i < labelCount; i++) {
         RectF &rt = keyLabels[i].rect;
-        if(keyLabels[i].time > labelSettings.fadeDuration) {
+        if(keyLabels[i].time > (int)labelSettings.fadeDuration) {
             if(keyLabels[i].fade) {
                 keyLabels[i].time -= SHOWTIMER_INTERVAL;
             }
@@ -499,7 +514,7 @@ void prepareLabels() {
     for(DWORD i = 0; i < labelCount; i ++) {
         keyLabels[i].rect.X = (REAL)labelSettings.borderSize;
         keyLabels[i].rect.Y = paddingH + unitH*(i+offset) + labelSpacing + labelSettings.borderSize;
-        if(keyLabels[i].time > labelSettings.lingerTime+labelSettings.fadeDuration) {
+        if(keyLabels[i].time > (int)(labelSettings.lingerTime+labelSettings.fadeDuration)) {
             keyLabels[i].time = labelSettings.lingerTime+labelSettings.fadeDuration;
         }
         if(keyLabels[i].time > 0) {
@@ -662,6 +677,11 @@ void saveSettings() {
     writeSettingInt(L"tcModifiers", tcModifiers);
     writeSettingInt(L"tcKey", tcKey);
     WritePrivateProfileString(L"KeyCastOW", L"branding", branding, iniFile);
+    WritePrivateProfileStruct(L"KeyCastOW", L"brandingFont", (LPVOID)&brandingSettings.font, sizeof(brandingSettings.font), iniFile);
+    writeSettingInt(L"brandingBgColor", brandingSettings.bgColor);
+    writeSettingInt(L"brandingTextColor", brandingSettings.textColor);
+    writeSettingInt(L"brandingBgOpacity", brandingSettings.bgOpacity);
+    writeSettingInt(L"brandingBorderSize", brandingSettings.borderSize);
     WritePrivateProfileString(L"KeyCastOW", L"comboChars", comboChars, iniFile);
 }
 // fixDeskOrigin — 修正显示原点，确保其位于当前工作区内
@@ -718,6 +738,11 @@ void loadSettings() {
     tcModifiers = GetPrivateProfileInt(L"KeyCastOW", L"tcModifiers", MOD_ALT, iniFile);
     tcKey = GetPrivateProfileInt(L"KeyCastOW", L"tcKey", 0x42, iniFile);
     GetPrivateProfileString(L"KeyCastOW", L"branding", L"双击此处修改配置", branding, BRANDINGMAX, iniFile);
+    brandingSettings.bgColor = GetPrivateProfileInt(L"KeyCastOW", L"brandingBgColor", RGB(0, 124, 254), iniFile);
+    brandingSettings.textColor = GetPrivateProfileInt(L"KeyCastOW", L"brandingTextColor", RGB(255, 255, 255), iniFile);
+    brandingSettings.bgOpacity = GetPrivateProfileInt(L"KeyCastOW", L"brandingBgOpacity", 175, iniFile);
+    brandingSettings.bgOpacity = min(brandingSettings.bgOpacity, 255);
+    brandingSettings.borderSize = GetPrivateProfileInt(L"KeyCastOW", L"brandingBorderSize", 8, iniFile);
     GetPrivateProfileString(L"KeyCastOW", L"comboChars", L"<->", comboChars, 4, iniFile);
     memset(&labelSettings.font, 0, sizeof(labelSettings.font));
     labelSettings.font.lfCharSet = DEFAULT_CHARSET;
@@ -729,6 +754,11 @@ void loadSettings() {
     labelSettings.font.lfQuality = ANTIALIASED_QUALITY;
     wcscpy_s(labelSettings.font.lfFaceName, LF_FACESIZE, TEXT("Arial Black"));
     GetPrivateProfileStruct(L"KeyCastOW", L"labelFont", &labelSettings.font, sizeof(labelSettings.font), iniFile);
+    CopyMemory(&brandingSettings.font, &labelSettings.font, sizeof(brandingSettings.font));
+    brandingSettings.font.lfHeight = -20;
+    brandingSettings.font.lfWeight = FW_BLACK;
+    wcscpy_s(brandingSettings.font.lfFaceName, LF_FACESIZE, TEXT("Arial"));
+    GetPrivateProfileStruct(L"KeyCastOW", L"brandingFont", &brandingSettings.font, sizeof(brandingSettings.font), iniFile);
 }
 // renderSettingsData — 将预览设置数据刷新到设置对话框的各控件
 // 使用 previewLabelSettings（而非 labelSettings），以便在确认前预览效果
@@ -750,6 +780,12 @@ void renderSettingsData(HWND hwndDlg) {
     SetDlgItemText(hwndDlg, IDC_BORDERSIZE, tmp);
     swprintf(tmp, 256, L"%d", previewLabelSettings.cornerSize);
     SetDlgItemText(hwndDlg, IDC_CORNERSIZE, tmp);
+    swprintf(tmp, 256, L"%d", previewBrandingSettings.bgOpacity);
+    SetDlgItemText(hwndDlg, IDC_BGOPACITY2, tmp);
+    swprintf(tmp, 256, L"%d", previewBrandingSettings.font.lfHeight < 0 ? -previewBrandingSettings.font.lfHeight : previewBrandingSettings.font.lfHeight);
+    SetDlgItemText(hwndDlg, IDC_TEXTOPACITY2, tmp);
+    swprintf(tmp, 256, L"%d", previewBrandingSettings.borderSize);
+    SetDlgItemText(hwndDlg, IDC_BORDERSIZE2, tmp);
 
     swprintf(tmp, 256, L"%d", labelSpacing);
     SetDlgItemText(hwndDlg, IDC_LABELSPACING, tmp);
@@ -799,6 +835,22 @@ void getLabelSettings(HWND hwndDlg, LabelSettings &lblSettings) {
     lblSettings.borderSize = _wtoi(tmp);
     GetDlgItemText(hwndDlg, IDC_CORNERSIZE, tmp, 256);
     lblSettings.cornerSize = _wtoi(tmp);
+}
+
+// getBrandingSettings — 从设置对话框控件中读取品牌标识外观设置
+// IDC_TEXTOPACITY2 当前用作文字大小输入框。
+void getBrandingSettings(HWND hwndDlg, BrandingSettings &brdSettings) {
+    WCHAR tmp[256];
+    GetDlgItemText(hwndDlg, IDC_BGOPACITY2, tmp, 256);
+    brdSettings.bgOpacity = _wtoi(tmp);
+    brdSettings.bgOpacity = min(brdSettings.bgOpacity, 255);
+    GetDlgItemText(hwndDlg, IDC_TEXTOPACITY2, tmp, 256);
+    int fontSize = _wtoi(tmp);
+    if(fontSize > 0) {
+        brdSettings.font.lfHeight = -fontSize;
+    }
+    GetDlgItemText(hwndDlg, IDC_BORDERSIZE2, tmp, 256);
+    brdSettings.borderSize = _wtoi(tmp);
 }
 DWORD previewTime = 0;          // 预览动画计时器
 #define PREVIEWTIMER_INTERVAL 5  // 预览定时器间隔（毫秒）
@@ -865,7 +917,7 @@ static void previewLabel() {
 // SettingsWndProc — 设置对话框的窗口过程
 // 处理初始化、通知、按钮命令等消息。
 // 字体/颜色变更会立即预览；点击"确定"后保存所有设置。
-// 注意：IDOK（确定）缺少 break，会 fall through 到 IDCANCEL 关闭对话框。
+// 点击“确定”后保存设置并保持窗口打开，点击“取消”关闭对话框。
 BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     WCHAR tmp[256];
@@ -946,6 +998,37 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                         saveSettings();
                     }
                     return TRUE;
+                case IDC_TEXTFONT2:
+                    {
+                        CHOOSEFONT cf ;
+                        cf.lStructSize    = sizeof (CHOOSEFONT) ;
+                        cf.hwndOwner      = hwndDlg ;
+                        cf.hDC            = NULL ;
+                        cf.lpLogFont      = &previewBrandingSettings.font ;
+                        cf.iPointSize     = 0 ;
+                        cf.Flags          = CF_INITTOLOGFONTSTRUCT | CF_SCREENFONTS | CF_EFFECTS ;
+                        cf.rgbColors      = 0 ;
+                        cf.lCustData      = 0 ;
+                        cf.lpfnHook       = NULL ;
+                        cf.lpTemplateName = NULL ;
+                        cf.hInstance      = NULL ;
+                        cf.lpszStyle      = NULL ;
+                        cf.nFontType      = 0 ;               // Returned from ChooseFont
+                        cf.nSizeMin       = 0 ;
+                        cf.nSizeMax       = 0 ;
+
+                        if(ChooseFont (&cf)) {
+                            swprintf(tmp, 256, L"%d", previewBrandingSettings.font.lfHeight < 0 ? -previewBrandingSettings.font.lfHeight : previewBrandingSettings.font.lfHeight);
+                            SetDlgItemText(hwndDlg, IDC_TEXTOPACITY2, tmp);
+                        }
+                    }
+                    return TRUE;
+                case IDC_TEXTCOLOR2:
+                    ColorDialog(hwndDlg, previewBrandingSettings.textColor);
+                    return TRUE;
+                case IDC_BGCOLOR2:
+                    ColorDialog(hwndDlg, previewBrandingSettings.bgColor);
+                    return TRUE;
                 case IDC_POSITION:
                     {
                         alignment = ComboBox_GetCurSel(GetDlgItem(hwndDlg, IDC_ALIGNMENT));
@@ -957,7 +1040,10 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                     }
                     return TRUE;
                 case IDOK:
+                    getLabelSettings(hwndDlg, previewLabelSettings);
+                    getBrandingSettings(hwndDlg, previewBrandingSettings);
                     labelSettings = previewLabelSettings;
+                    brandingSettings = previewBrandingSettings;
                     GetDlgItemText(hwndDlg, IDC_LABELSPACING, tmp, 256);
                     labelSpacing = _wtoi(tmp);
                     if(labelSpacing > (DWORD)(desktopRect.bottom - desktopRect.top)/3) {
@@ -1004,6 +1090,7 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                     }
                     prepareLabels();
                     saveSettings();
+                    return TRUE;
                 case IDCANCEL:
                     EndDialog(hwndDlg, wParam);
                     previewTimer.Stop();
@@ -1109,6 +1196,7 @@ LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
                 {
                     case MENU_CONFIG:
                         CopyMemory(&previewLabelSettings, &labelSettings, sizeof(previewLabelSettings));
+                        CopyMemory(&previewBrandingSettings, &brandingSettings, sizeof(previewBrandingSettings));
                         renderSettingsData(hDlgSettings);
                         ShowWindow(hDlgSettings, SW_SHOW);
                         SetForegroundWindow(hDlgSettings);
