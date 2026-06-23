@@ -46,6 +46,9 @@
 #define IDC_DOWN                        1041
 #define IDC_STATIC_ComBIne              1042
 #define IDC_AUTORUN                     1043
+#define IDC_STATIC_Repeat               1044
+#define IDC_DISABLE_SHOW                1045
+#define IDC_STATIC_DIS                  1046
 
 // Next default values for new objects
 // 
@@ -53,7 +56,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        104
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1043
+#define _APS_NEXT_CONTROL_VALUE         1047
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif
